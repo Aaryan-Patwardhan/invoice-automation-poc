@@ -6,10 +6,15 @@ Extracts text from PDFs, parses invoice fields via Ollama/Qwen2.5:1.5b, stores i
 
 import os
 import re
+import io
 import json
+import base64
 import sqlite3
 import datetime
 from pathlib import Path
+
+from PIL import Image           # type: ignore[import-not-found]
+from pdf2image import convert_from_path  # type: ignore[import-not-found]
 
 import fitz          # PyMuPDF  # type: ignore[import-not-found]
 import requests      # used to call Ollama REST API  # type: ignore[import-not-found]
@@ -19,7 +24,9 @@ import requests      # used to call Ollama REST API  # type: ignore[import-not-f
 SAMPLES_DIR   = Path("samples")
 DB_PATH       = Path("invoices.db")
 OLLAMA_URL    = "http://localhost:11434/api/generate"
+OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL  = "qwen2.5:1.5b"
+VISION_MODEL  = "qwen2.5vl:3b"
 
 REQUIRED_FIELDS = [
     "vendor_name",
@@ -58,6 +65,70 @@ def extract_text(pdf_path: str | Path) -> str:
         pages.append(page.get_text())
     doc.close()
     return "\n".join(pages)
+
+
+# ─── Step 1b: OCR Fallback ────────────────────────────────────────────────────
+
+def is_text_extractable(text: str) -> bool:
+    """Return False if extracted text is too short to be useful (< 100 chars)."""
+    return len(text.strip()) >= 100
+
+
+def pdf_to_images(pdf_path: str) -> list:
+    """Convert PDF pages to PIL Image objects using pdf2image at 200 DPI."""
+    return convert_from_path(str(pdf_path), dpi=200)
+
+
+def parse_invoice_vision(image: Image.Image) -> dict:
+    """
+    Send a PIL Image to qwen2.5vl:3b via Ollama's vision API.
+    Returns parsed invoice fields as a dict, or empty dict on failure.
+    """
+    try:
+        # Convert PIL Image to base64-encoded PNG
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        payload = {
+            "model": VISION_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Extract the following fields from this invoice image "
+                        "and return ONLY valid JSON, no explanation, no markdown fences:\n"
+                        '{\n'
+                        '  "vendor_name": "<string>",\n'
+                        '  "invoice_number": "<string>",\n'
+                        '  "invoice_date": "<string>",\n'
+                        '  "total_amount": "<string>",\n'
+                        '  "gst_number": "<string or null>",\n'
+                        '  "buyer_name": "<string or null>"\n'
+                        '}'
+                    ),
+                    "images": [img_b64],
+                }
+            ],
+            "stream": False,
+            "options": {"temperature": 0.0},
+        }
+
+        response = requests.post(OLLAMA_CHAT_URL, json=payload, timeout=180)
+        response.raise_for_status()
+        llm_output = response.json().get("message", {}).get("content", "").strip()
+
+        # Strip markdown fences if present
+        llm_output = _strip_markdown_fences(llm_output)
+
+        data = json.loads(llm_output)
+        for field in REQUIRED_FIELDS:
+            data.setdefault(field, None)
+        return data
+
+    except Exception as exc:
+        print(f"  [ERROR] Vision OCR failed: {exc}")
+        return {}
 
 
 # ─── Step 2: Parse Invoice via Ollama ─────────────────────────────────────────
@@ -243,8 +314,20 @@ def main() -> None:
             print(f"  [ERROR] Text extraction failed: {exc}")
             continue
 
-        # 2. Parse invoice fields
-        data = parse_invoice(raw_text)
+        # 2. Parse invoice fields — TEXT or OCR path
+        if is_text_extractable(raw_text):
+            data = parse_invoice(raw_text)
+            print(f"  [TEXT] {pdf_path.name}")
+        else:
+            print(f"  Text too short, falling back to vision OCR...")
+            try:
+                images = pdf_to_images(str(pdf_path))
+                data = parse_invoice_vision(images[0])
+            except Exception as exc:
+                print(f"  [ERROR] OCR fallback failed: {exc}")
+                data = {}
+            print(f"  [OCR] {pdf_path.name}")
+
         print(f"  Parsed data: {json.dumps(data, ensure_ascii=False)}")
 
         # 3. Guard: skip save if every field is empty / None
