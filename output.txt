@@ -1,0 +1,35 @@
+Found 5 PDF(s) in 'samples'. Starting pipeline...
+
+── Processing: sample1_food.pdf
+  Extracted 1217 characters.
+  Parsed data: {"vendor_name": "ZOMATO LIMITED", "invoice_number": "225WH74O00024196", "invoice_date": "2022-11-12", "total_amount": "567.00", "gst_number": null, "buyer_name": "AASHEESH"}
+  [SKIP] Already in DB (row id=1), skipping insert.
+  Saved to DB with row id=1.
+
+── Processing: sample2_agency.pdf
+  Extracted 2842 characters.
+  [WARN] JSON parsed after stripping markdown fences.
+  Parsed data: {"vendor_name": "KPSS SALES AGENCY", "invoice_number": "SLTC000001", "invoice_date": "2017-08-24T11:58:00Z", "total_amount": "14396.77", "gst_number": null, "buyer_name": null}
+  [SKIP] Already in DB (row id=2), skipping insert.
+  Saved to DB with row id=2.
+
+── Processing: sample3_corp.pdf
+  Extracted 812 characters.
+  [WARN] JSON parsed after stripping markdown fences.
+  Parsed data: {"vendor_name": "Capricorn Identity Services Pvt Ltd", "invoice_number": null, "invoice_date": "2023-10-05", "total_amount": "498.76", "gst_number": "07 AAVCS8838ClZR", "buyer_name": "Capricorn Identity Services Pvt Ltd"}
+  [SKIP] Already in DB (row id=3), skipping insert.
+  Saved to DB with row id=3.
+
+── Processing: sample4_service.pdf
+  Extracted 650 characters.
+  Parsed data: {"vendor_name": "TECHSPARK SOLUTIONS PVT LTD", "invoice_number": "INV-2024-00847", "invoice_date": "2024-03-15", "total_amount": "1,79,950.00", "gst_number": null, "buyer_name": "INFOSYS LIMITED"}
+  [SKIP] Already in DB (row id=4), skipping insert.
+  Saved to DB with row id=4.
+
+── Processing: sample5_retail.pdf
+  Extracted 520 characters.
+  Parsed data: {"vendor_name": "SHARMA GENERAL STORE", "invoice_number": "SGS/2024/1193", "invoice_date": "2024-03-20", "total_amount": "1610.70", "gst_number": "07ABCPS4321F1Z3", "buyer_name": "RAMESH KUMAR VERMA"}
+  [SKIP] Already in DB (row id=5), skipping insert.
+  Saved to DB with row id=5.
+
+Pipeline complete. Results stored in 'invoices.db'.

@@ -25,66 +25,79 @@ from extractor import (
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
 
 
-def _process_single_file(file_path: str) -> tuple[dict, str]:
+def _get_path(fp) -> str:
+    """Robustly extract the file path regardless of Gradio version (dict, str, or NamedString)."""
+    if isinstance(fp, str): return fp
+    if hasattr(fp, "name"): return fp.name
+    if isinstance(fp, dict) and "name" in fp: return fp["name"]
+    return str(fp)
+
+def _process_single_file(raw_fp) -> tuple[dict, str]:
     """
     Process a single file (PDF or image) through the pipeline.
     Returns (data_dict, status_string).
     """
-    path = Path(file_path)
-    ext = path.suffix.lower()
-    name = path.name
+    try:
+        file_path = _get_path(raw_fp)
+        path = Path(file_path)
+        ext = path.suffix.lower()
+        name = path.name
 
-    # ── Image file → direct vision OCR ──
-    if ext in IMAGE_EXTENSIONS:
-        try:
-            image = Image.open(file_path)
-            data = parse_invoice_vision(image)
-        except Exception as exc:
-            return {}, f"❌ [{name}] Image OCR failed: {exc}"
-        status = f"🖼️ [IMAGE-OCR] {name} — Parsed via vision LLM (qwen2.5vl:3b)"
-
-    # ── PDF file → TEXT or OCR path ──
-    elif ext == ".pdf":
-        # Copy to samples/ for record keeping
+        # Enforce recording all inputs in samples/
         temp_path = SAMPLES_DIR / f"temp_{name}"
         SAMPLES_DIR.mkdir(exist_ok=True)
-        shutil.copy(file_path, temp_path)
-
         try:
-            raw_text = extract_text(temp_path)
-        except Exception as exc:
-            return {}, f"❌ [{name}] Text extraction failed: {exc}"
+            shutil.copy(file_path, temp_path)
+            file_path = str(temp_path)
+        except Exception:
+            pass  # Fallback to the original temporary file if copy fails
 
-        if is_text_extractable(raw_text):
-            data = parse_invoice(raw_text)
-            status = f"📄 [TEXT] {name} — Parsed via text LLM (qwen2.5:1.5b)"
-        else:
+        # ── Image file → direct vision OCR ──
+        if ext in IMAGE_EXTENSIONS:
             try:
-                images = pdf_to_images(str(temp_path))
-                data = parse_invoice_vision(images[0])
+                image = Image.open(file_path)
+                data = parse_invoice_vision(image)
             except Exception as exc:
-                return {}, f"❌ [{name}] OCR fallback failed: {exc}"
-            status = f"🔍 [OCR] {name} — Parsed via vision LLM (qwen2.5vl:3b)"
+                return {}, f"❌ [{name}] Image OCR failed: {exc}"
+            status = f"🖼️ [IMAGE-OCR] {name} — Parsed via vision LLM"
+            
+        # ── PDF file → TEXT or OCR path ──
+        elif ext == ".pdf":
+            try:
+                raw_text = extract_text(file_path)
+            except Exception as exc:
+                return {}, f"❌ [{name}] Text extraction failed: {exc}"
 
-        # Use temp_path as source_file for DB
-        file_path = str(temp_path)
-    else:
-        return {}, f"⚠️ [{name}] Unsupported file type: {ext}"
+            if is_text_extractable(raw_text):
+                data = parse_invoice(raw_text)
+                status = f"📄 [TEXT] {name} — Parsed via text LLM"
+            else:
+                try:
+                    images = pdf_to_images(file_path)
+                    data = parse_invoice_vision(images[0]) if images else {}
+                except Exception as exc:
+                    return {}, f"❌ [{name}] OCR fallback failed: {exc}"
+                status = f"🔍 [OCR] {name} — Parsed via vision LLM"
+        else:
+            return {}, f"⚠️ [{name}] Unsupported file type: {ext}"
 
-    # ── Save to DB ──
-    if data and any(data.get(f) for f in REQUIRED_FIELDS):
-        try:
-            row_id = save_to_db(data, file_path)
-            status += f" → ✅ DB row={row_id}"
-        except Exception as exc:
-            status += f" → ⚠️ DB save failed: {exc}"
-    else:
-        status += " → ⚠️ All fields empty, not saved."
+        # ── Save to DB ──
+        if data and any(data.get(f) for f in REQUIRED_FIELDS):
+            try:
+                row_id = save_to_db(data, file_path)
+                status += f" → ✅ DB row={row_id}"
+            except Exception as exc:
+                status += f" → ⚠️ DB save failed: {exc}"
+        else:
+            status += " → ⚠️ All fields empty, not saved."
 
-    return data, status
+        return data, status
+
+    except Exception as e:
+        return {}, f"❌ Critical error parsing file: {e}"
 
 
-def process_invoices(file_paths: list[str]) -> tuple[str, str]:
+def process_invoices(file_paths) -> tuple[str, str]:
     """
     Process one or more uploaded files (PDFs and/or images).
     Returns (combined_json, combined_status).
@@ -92,12 +105,17 @@ def process_invoices(file_paths: list[str]) -> tuple[str, str]:
     if not file_paths:
         return "", "⚠️ No files uploaded."
 
+    # Force inputs into iterable list
+    if not isinstance(file_paths, list):
+        file_paths = [file_paths]
+
     all_results = []
     all_statuses = []
 
     for fp in file_paths:
         data, status = _process_single_file(fp)
-        all_results.append({"file": Path(fp).name, **data})
+        file_name = Path(_get_path(fp)).name
+        all_results.append({"file": file_name, **data})
         all_statuses.append(status)
 
     # Single file → return plain object; multiple → return array
